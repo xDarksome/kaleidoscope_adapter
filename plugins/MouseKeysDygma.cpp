@@ -88,22 +88,29 @@ EventHandlerResult MouseKeys_::beforeReportingState() {
 
   int8_t moveX = 0, moveY = 0;
 
+  // If any alternative mouse speed key is held, the whole movement uses the
+  // alternative settings.
+  bool alternative = mouseMoveIntent & KEY_MOUSE_ALTERNATIVE;
+  uint8_t speed = alternative ? MOUSEKEYS_ALTERNATIVE_SPEED : p_MouseKeys_config->speed;
+  uint8_t accelSpeed = alternative ? MOUSEKEYS_ALTERNATIVE_ACCEL_SPEED : p_MouseKeys_config->accelSpeed;
+  setSpeedLimit( alternative ? MOUSEKEYS_ALTERNATIVE_SPEED_LIMIT : p_MouseKeys_config->speedLimit );
+
   if ( kbdtimer_check( &accel_start_timer ) ) {
-    if (MouseWrapper.accelStep < 255 - p_MouseKeys_config->accelSpeed) {
-      MouseWrapper.accelStep += p_MouseKeys_config->accelSpeed;
+    if (MouseWrapper.accelStep < 255 - accelSpeed) {
+      MouseWrapper.accelStep += accelSpeed;
     }
     kbdtimer_set_ms( &accel_start_timer, p_MouseKeys_config->accelDelay );
   }
 
   if (mouseMoveIntent & KEY_MOUSE_UP)
-    moveY -= p_MouseKeys_config->speed;
+    moveY -= speed;
   if (mouseMoveIntent & KEY_MOUSE_DOWN)
-    moveY += p_MouseKeys_config->speed;
+    moveY += speed;
 
   if (mouseMoveIntent & KEY_MOUSE_LEFT)
-    moveX -= p_MouseKeys_config->speed;
+    moveX -= speed;
   if (mouseMoveIntent & KEY_MOUSE_RIGHT)
-    moveX += p_MouseKeys_config->speed;
+    moveX += speed;
 
   MouseWrapper.move(moveX, moveY);
 
@@ -309,7 +316,7 @@ EventHandlerResult MouseKeys_::onFocusEvent(const char *command)
   {
     if (::Focus.isEOL())
     {
-      ::Focus.send(MouseWrapper.speedLimit);
+      ::Focus.send(p_MouseKeys_config->speedLimit);
     }
     else
     {
