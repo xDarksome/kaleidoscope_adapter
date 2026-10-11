@@ -140,21 +140,102 @@ EventHandlerResult Qukeys::beforeReportingState() {
 
   // If any events get flushed from the queue, stop there; we can only safely
   // send the one report per cycle.
-  if (processQueue()) {
-    return EventHandlerResult::OK;
+  if (! processQueue()) {
+    // If we get here, that means that the first event in the queue is a qukey
+    // press. All that's left to do is to check if it's been held long enough
+    // that it has timed out.
+    if (Runtime.hasTimeExpired(event_queue_.timestamp(0), p_Qukeys_config->hold_timeout)) {
+      // If it's a SpaceCadet-type key, it takes on its primary value, otherwise
+      // it takes on its secondary value.
+      Key event_key = isModifierKey(queue_head_.primary_key) ?
+                      queue_head_.primary_key : queue_head_.alternate_key;
+      flushEvent(event_key);
+    } else {
+      // The qukey is still undecided, so it may be eligible to have its
+      // modifier applied speculatively.
+      startSpeculativeHold();
+    }
   }
 
-  // If we get here, that means that the first event in the queue is a qukey
-  // press. All that's left to do is to check if it's been held long enough that
-  // it has timed out.
-  if (Runtime.hasTimeExpired(event_queue_.timestamp(0), p_Qukeys_config->hold_timeout)) {
-    // If it's a SpaceCadet-type key, it takes on its primary value, otherwise
-    // it takes on its secondary value.
-    Key event_key = isModifierKey(queue_head_.primary_key) ?
-                    queue_head_.primary_key : queue_head_.alternate_key;
-    flushEvent(event_key);
-  }
+  updateSpeculativeHold();
   return EventHandlerResult::OK;
+}
+
+
+// Speculative hold (like QMK's `SPECULATIVE_HOLD`): while a qukey whose
+// alternate value is a keyboard modifier is still undecided, that modifier is
+// added to the HID report right away. This makes mod-taps usable together with
+// an external pointing device (e.g. Ctrl+click or Shift+click) without waiting
+// for the hold timeout. Other key presses are still held back in the event
+// queue, so they never see the speculative modifier. If the qukey resolves to
+// its primary (tap) value, the modifier simply disappears from the report in
+// the same cycle the tap key is pressed, and the HID driver sends a report
+// without the new key first, so the host sees the modifier released before the
+// tap key is pressed.
+void Qukeys::startSpeculativeHold() {
+  if (speculative_hold_mods_ == 0)
+    return;
+
+  KeyAddr queue_head_addr = event_queue_.addr(0);
+  if (speculative_hold_addr_ == queue_head_addr)
+    return;
+
+  // SpaceCadet-type keys already produce their modifier on press.
+  if (isModifierKey(queue_head_.primary_key))
+    return;
+
+  uint8_t mods = getModifiers(queue_head_.alternate_key);
+  if (mods == 0 || (mods & ~speculative_hold_mods_) != 0)
+    return;
+
+  speculative_hold_addr_ = queue_head_addr;
+  speculative_hold_key_ = queue_head_.alternate_key;
+}
+
+// Keeps the speculative modifier in the report for as long as the press event
+// of the qukey is still waiting in the queue. Once it has been flushed (in
+// either state), speculation stops: as a hold, the modifier is then reported
+// by the normal held key handling, and as a tap, it must not be reported.
+void Qukeys::updateSpeculativeHold() {
+  if (! speculative_hold_addr_.isValid())
+    return;
+
+  for (uint8_t i{0}; i < event_queue_.length(); ++i) {
+    if (event_queue_.addr(i) == speculative_hold_addr_) {
+      if (event_queue_.isPress(i)) {
+        Runtime.hid().keyboard().pressKey(speculative_hold_key_, false);
+        return;
+      }
+      break;
+    }
+  }
+
+  speculative_hold_addr_ = KeyAddr{};
+}
+
+// Returns the modifiers produced by `key` as a HID modifier bitmask (bit 0 is
+// left Control, ..., bit 7 is right GUI), or 0 if `key` isn't a plain keyboard
+// modifier key (e.g. a layer shift).
+uint8_t Qukeys::getModifiers(Key key) {
+  if ((key.getFlags() & (SYNTHETIC | RESERVED)) != 0 ||
+      key.getKeyCode() < HID_KEYBOARD_FIRST_MODIFIER ||
+      key.getKeyCode() > HID_KEYBOARD_LAST_MODIFIER) {
+    return 0;
+  }
+
+  uint8_t mods = 1 << (key.getKeyCode() - HID_KEYBOARD_FIRST_MODIFIER);
+  uint8_t flags = key.getFlags();
+  if (flags & CTRL_HELD)
+    mods |= mod_left_control;
+  if (flags & SHIFT_HELD)
+    mods |= mod_left_shift;
+  if (flags & LALT_HELD)
+    mods |= mod_left_alt;
+  if (flags & GUI_HELD)
+    mods |= mod_left_gui;
+  if (flags & RALT_HELD)
+    mods |= mod_right_alt;
+  return mods;
 }
 
 
@@ -214,6 +295,7 @@ bool Qukeys::processQueue() {
                               p_Qukeys_config->minimum_prior_interval) &&
       !qukey_is_spacecadet) {
     flushEvent(queue_head_.primary_key);
+    return true;
   }
 
   // Now we search the queue for events that will let us decide if the qukey
@@ -531,7 +613,7 @@ bool isModifierKey(Key key) {
 
 EventHandlerResult Qukeys::onFocusEvent(const char *command)
 {
-  if (::Focus.handleHelp(command, PSTR("qukeys.holdTimeout\nqukeys.overlapThreshold\nqukeys.minimumHoldTime\nqukeys.minimumPriorInterval")))
+  if (::Focus.handleHelp(command, PSTR("qukeys.holdTimeout\nqukeys.overlapThreshold\nqukeys.minimumHoldTime\nqukeys.minimumPriorInterval\nqukeys.speculativeHold")))
     return EventHandlerResult::OK;
 
   if (strncmp_P(command, PSTR("qukeys."), 7) != 0)
@@ -601,6 +683,20 @@ EventHandlerResult Qukeys::onFocusEvent(const char *command)
       ::Focus.read(prior);
 
       mem_minimum_prior_interval_save( prior );
+    }
+  }
+
+  if (strcmp_P(command + 7, PSTR("speculativeHold")) == 0)
+  {
+    if (::Focus.isEOL())
+    {
+      ::Focus.send(Qukeys::speculative_hold_mods_);
+    }
+    else
+    {
+      uint8_t mods;
+      ::Focus.read(mods);
+      setSpeculativeHoldMods(mods);
     }
   }
 
