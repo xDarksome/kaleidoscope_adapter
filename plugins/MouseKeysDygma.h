@@ -24,6 +24,23 @@
 #include "kaleidoscope/plugin/MouseKeys/MouseWarpModes.h"
 #include "kaleidoscope/plugin/MouseKeys/MouseWrapper.h"
 
+// Alternative mouse speed keys: movement keys with this bit set in their
+// keycode (e.g. 0x5081 for up, instead of 0x5001) move the pointer using the
+// alternative speed, acceleration and speed limit below, instead of the
+// primary `mouse.*` settings.
+#define KEY_MOUSE_ALTERNATIVE  0b10000000
+
+// The alternative mouse settings, which can be overridden at build time.
+#ifndef MOUSEKEYS_ALTERNATIVE_SPEED
+#define MOUSEKEYS_ALTERNATIVE_SPEED          1
+#endif
+#ifndef MOUSEKEYS_ALTERNATIVE_ACCEL_SPEED
+#define MOUSEKEYS_ALTERNATIVE_ACCEL_SPEED    1
+#endif
+#ifndef MOUSEKEYS_ALTERNATIVE_SPEED_LIMIT
+#define MOUSEKEYS_ALTERNATIVE_SPEED_LIMIT    127
+#endif
+
 namespace kaleidoscope {
 namespace plugin {
 class MouseKeys_ : public kaleidoscope::Plugin {
