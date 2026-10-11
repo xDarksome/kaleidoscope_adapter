@@ -37,6 +37,18 @@
 #define ALT_T(key) MT(LeftAlt, key)
 #define GUI_T(key) MT(LeftGui, key)
 
+// Define `QUKEYS_SPECULATIVE_HOLD` to enable speculative hold for Control and
+// Shift by default (see `Qukeys::setSpeculativeHoldMods()`).
+#ifdef QUKEYS_SPECULATIVE_HOLD
+#define _QUKEYS_SPECULATIVE_HOLD_MODS_DEFAULT                          \
+  (kaleidoscope::plugin::Qukeys::mod_left_control |                    \
+   kaleidoscope::plugin::Qukeys::mod_left_shift |                      \
+   kaleidoscope::plugin::Qukeys::mod_right_control |                   \
+   kaleidoscope::plugin::Qukeys::mod_right_shift)
+#else
+#define _QUKEYS_SPECULATIVE_HOLD_MODS_DEFAULT 0
+#endif
+
 #define LT(layer, key) Key(kaleidoscope::ranges::DUL_FIRST + (layer << 8) + (Key_ ## key).getKeyCode())
 
 /*#define _DEPRECATED_MESSAGE_QUKEY_ROW_COL_CONSTRUCTOR                           \
@@ -163,6 +175,29 @@ class Qukeys : public kaleidoscope::Plugin {
 //    minimum_prior_interval_ = min_interval;
 //  }
 
+  // HID modifier bits, for use with `setSpeculativeHoldMods()`.
+  static constexpr uint8_t mod_left_control{1 << 0};
+  static constexpr uint8_t mod_left_shift{1 << 1};
+  static constexpr uint8_t mod_left_alt{1 << 2};
+  static constexpr uint8_t mod_left_gui{1 << 3};
+  static constexpr uint8_t mod_right_control{1 << 4};
+  static constexpr uint8_t mod_right_shift{1 << 5};
+  static constexpr uint8_t mod_right_alt{1 << 6};
+  static constexpr uint8_t mod_right_gui{1 << 7};
+
+  // Set the modifiers eligible for speculative hold, as a bitmask of the
+  // `mod_*` constants above (0 turns the feature off). Like QMK's
+  // `SPECULATIVE_HOLD`, while a qukey whose alternate (hold) value is a
+  // modifier is still undecided, the modifier is sent to the host right away,
+  // and withdrawn again if the qukey turns out to be a tap. This makes mod-taps
+  // usable for e.g. Ctrl+click or Shift+scroll with a mouse. A qukey is only
+  // eligible if all of its modifiers are in the mask. Alt and GUI are excluded
+  // from the default mask because tapping them on their own can have side
+  // effects on some systems (e.g. opening a menu).
+  void setSpeculativeHoldMods(uint8_t mods) {
+    speculative_hold_mods_ = mods;
+  }
+
   // Function for defining the array of qukeys data (in PROGMEM). It's a
   // template function that takes as its sole argument an array reference of
   // size `_qukeys_count`, so there's no need to use `sizeof` to calculate the
@@ -248,6 +283,14 @@ class Qukeys : public kaleidoscope::Plugin {
   // that would cause other plugins to also ignore the event.
   bool flushing_queue_{false};
 
+  // Bitmask of the modifiers eligible for speculative hold (0 is off).
+  uint8_t speculative_hold_mods_{_QUKEYS_SPECULATIVE_HOLD_MODS_DEFAULT};
+
+  // The address and the alternate Key value of the qukey whose modifier is
+  // currently being applied speculatively, if any.
+  KeyAddr speculative_hold_addr_{};
+  Key speculative_hold_key_{Key_Transparent};
+
   // A cache of the current qukey's primary and alternate key values, so we
   // don't have to keep looking them up from PROGMEM.
   struct {
@@ -262,6 +305,9 @@ class Qukeys : public kaleidoscope::Plugin {
   bool isDualUseKey(Key key);
   bool releaseDelayed(uint16_t overlap_start, uint16_t overlap_end) const;
   bool isKeyAddrInQueueBeforeIndex(KeyAddr k, uint8_t index) const;
+  void startSpeculativeHold();
+  void updateSpeculativeHold();
+  static uint8_t getModifiers(Key key);
 
   void mem_hold_timeout_save( uint16_t hold_timeout );
   void mem_overlap_threshold_save( uint8_t overlap_threshold );
