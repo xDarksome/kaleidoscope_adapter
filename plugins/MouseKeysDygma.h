@@ -41,6 +41,16 @@
 #define MOUSEKEYS_ALTERNATIVE_SPEED_LIMIT    127
 #endif
 
+// Speed multipliers applied while Shift is held, to the primary and to the
+// alternative mouse speed keys respectively (e.g. 0.5 or 2.0). They scale both
+// the movement and the speed limit, and can be overridden at build time.
+#ifndef MOUSEKEYS_SHIFT_MULTIPLIER
+#define MOUSEKEYS_SHIFT_MULTIPLIER                1.0
+#endif
+#ifndef MOUSEKEYS_ALTERNATIVE_SHIFT_MULTIPLIER
+#define MOUSEKEYS_ALTERNATIVE_SHIFT_MULTIPLIER    1.0
+#endif
+
 namespace kaleidoscope {
 namespace plugin {
 class MouseKeys_ : public kaleidoscope::Plugin {
@@ -80,6 +90,7 @@ class MouseKeys_ : public kaleidoscope::Plugin {
   static kbdtimer_t wheel_start_timer;
 
   static void scrollWheel(uint8_t keyCode);
+  static void move(int8_t x, int8_t y, uint8_t speedLimit, uint16_t multiplier);
 
   static void mem_speed_save( uint8_t speed );
   static void mem_speed_delay_save( uint16_t speedDelay );

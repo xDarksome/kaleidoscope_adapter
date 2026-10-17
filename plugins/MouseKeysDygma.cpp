@@ -32,6 +32,13 @@
 #define DEFAULT_WHEEL_DELAY             50
 #define DEFAULT_SPEED_LIMIT             127
 
+// Speed multipliers as 8.8 fixed point (256 = 1.0).
+static constexpr uint16_t SHIFT_MULTIPLIER =
+    uint16_t(MOUSEKEYS_SHIFT_MULTIPLIER * 256 + 0.5);
+static constexpr uint16_t ALTERNATIVE_SHIFT_MULTIPLIER =
+    uint16_t(MOUSEKEYS_ALTERNATIVE_SHIFT_MULTIPLIER * 256 + 0.5);
+static constexpr uint16_t NO_MULTIPLIER = 256;
+
 namespace kaleidoscope {
 namespace plugin {
 
@@ -67,6 +74,78 @@ void MouseKeys_::scrollWheel(uint8_t keyCode) {
     kaleidoscope::Runtime.hid().mouse().move(0, 0, 0, p_MouseKeys_config->wheelSpeed);
 }
 
+// To approximate a sine wave, this uses two parabolas. Acceleration begins
+// slowly, grows rapidly in the middle, and slows again near the top.
+// (Same curve as MouseWrapper_::acceleration().)
+static uint8_t acceleration(uint8_t cycles) {
+  if (cycles < 128) {
+    uint16_t c2 = cycles * cycles;
+    return 1 + (c2 >> 7);
+  } else {
+    uint16_t remaining_cycles = 256 - cycles;
+    uint16_t c2 = remaining_cycles * remaining_cycles;
+    return 255 - (c2 >> 7);
+  }
+}
+
+// Get the diagonalized version of a value, i.e. value * sqrt(2) / 2. If the
+// value ends up being zero, return the original value instead.
+static int16_t diagonalize(int16_t value) {
+  int16_t diagonalValue = value * 99 / 140;
+  return (diagonalValue == 0 ? value : diagonalValue);
+}
+
+static int32_t clampMove(int32_t value, int32_t limit) {
+  if (value > limit) return limit;
+  if (value < -limit) return -limit;
+  return value;
+}
+
+// Move the pointer, like MouseWrapper_::move(), but with a speed multiplier
+// (8.8 fixed point) applied to both the movement and the speed limit. The
+// movement is computed in 1/256ths of a sub-pixel, so that fractional speeds
+// (e.g. a multiplier of 0.5 on a speed of 1) still add up over time. Unlike
+// MouseWrapper_::move(), the leftover is added after the speed limit is
+// applied, so that movement capped below one pixel per step still adds up
+// instead of getting stuck (which used to freeze diagonal movement with low
+// speed limits).
+void MouseKeys_::move(int8_t x, int8_t y, uint8_t speedLimit, uint16_t multiplier) {
+  static int32_t remainderX = 0;
+  static int32_t remainderY = 0;
+  const int32_t unitsPerPixel = (int32_t)MouseWrapper.subpixelsPerPixel * 256;
+
+  // Keep the result within what a single HID report can carry (127 pixels).
+  int32_t limit = (int32_t)speedLimit * multiplier;
+  if (limit > 127 * unitsPerPixel) limit = 127 * unitsPerPixel;
+
+  if (x != 0 && y != 0) {
+    // Diagonal movements get a diagonalized speed and speed limit, so that
+    // the pointer moves at the same speed in all directions.
+    limit = limit * 99 / 140;
+    x = diagonalize(x);
+    y = diagonalize(y);
+  }
+
+  int32_t step = (int32_t)acceleration(MouseWrapper.accelStep) * multiplier;
+  int32_t moveX = 0;
+  int32_t moveY = 0;
+
+  if (x != 0) {
+    moveX = clampMove(x * step, limit) + remainderX;
+  }
+  if (y != 0) {
+    moveY = clampMove(y * step, limit) + remainderY;
+  }
+
+  MouseWrapper.end_warping();
+  // Move by whole pixels, and save the leftover for later.
+  int8_t pixelsX = moveX / unitsPerPixel;
+  int8_t pixelsY = moveY / unitsPerPixel;
+  kaleidoscope::Runtime.hid().mouse().move(pixelsX, pixelsY, 0);
+  remainderX = moveX - pixelsX * unitsPerPixel;
+  remainderY = moveY - pixelsY * unitsPerPixel;
+}
+
 EventHandlerResult MouseKeys_::afterEachCycle() {
   kaleidoscope::Runtime.hid().mouse().sendReport();
   kaleidoscope::Runtime.hid().mouse().releaseAllButtons();
@@ -93,7 +172,13 @@ EventHandlerResult MouseKeys_::beforeReportingState() {
   bool alternative = mouseMoveIntent & KEY_MOUSE_ALTERNATIVE;
   uint8_t speed = alternative ? MOUSEKEYS_ALTERNATIVE_SPEED : p_MouseKeys_config->speed;
   uint8_t accelSpeed = alternative ? MOUSEKEYS_ALTERNATIVE_ACCEL_SPEED : p_MouseKeys_config->accelSpeed;
-  setSpeedLimit( alternative ? MOUSEKEYS_ALTERNATIVE_SPEED_LIMIT : p_MouseKeys_config->speedLimit );
+  uint8_t speedLimit = alternative ? MOUSEKEYS_ALTERNATIVE_SPEED_LIMIT : p_MouseKeys_config->speedLimit;
+
+  // While Shift is held, the movement is scaled by that set's multiplier.
+  bool shift = kaleidoscope::Runtime.hid().keyboard().isModifierKeyActive(Key_LeftShift) ||
+               kaleidoscope::Runtime.hid().keyboard().isModifierKeyActive(Key_RightShift);
+  uint16_t multiplier = !shift ? NO_MULTIPLIER :
+                        alternative ? ALTERNATIVE_SHIFT_MULTIPLIER : SHIFT_MULTIPLIER;
 
   if ( kbdtimer_check( &accel_start_timer ) ) {
     if (MouseWrapper.accelStep < 255 - accelSpeed) {
@@ -112,7 +197,7 @@ EventHandlerResult MouseKeys_::beforeReportingState() {
   if (mouseMoveIntent & KEY_MOUSE_RIGHT)
     moveX += speed;
 
-  MouseWrapper.move(moveX, moveY);
+  move(moveX, moveY, speedLimit, multiplier);
 
   return EventHandlerResult::OK;
 }
