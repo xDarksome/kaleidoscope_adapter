@@ -289,6 +289,15 @@ bool Qukeys::processQueue() {
   // key, so we don't need to do it repeatedly later.
   bool qukey_is_spacecadet = isModifierKey(queue_head_.primary_key);
 
+  // Whether this qukey takes on its alternate value as soon as another key is
+  // pressed (hold-on-other-key-press), depending on whether its alternate
+  // value is a layer shift or a modifier.
+  bool alternate_is_layer =
+    queue_head_.alternate_key.getFlags() == (SYNTHETIC | SWITCH_TO_KEYMAP);
+  bool hold_on_other_key_press = !qukey_is_spacecadet &&
+    (hold_on_other_key_press_ & (alternate_is_layer ? hold_on_other_key_press_layer
+                                                    : hold_on_other_key_press_mod));
+
   // If the qukey press is followed a printable key too closely, it's not
   // eligible to take on its alternate value unless it's a SpaceCadet-type key.
   if (!Runtime.hasTimeExpired(prior_keypress_timestamp_,
@@ -309,6 +318,12 @@ bool Qukeys::processQueue() {
       // if they are pressed and released with no rollover.
       if (qukey_is_spacecadet) {
         flushEvent(queue_head_.primary_key);
+        return true;
+      }
+      // With hold-on-other-key-press, any subsequent key press makes the
+      // qukey take on its alternate value right away.
+      if (hold_on_other_key_press) {
+        flushEvent(queue_head_.alternate_key);
         return true;
       }
       // Otherwise, we've found a subsequent key press, so we record it for the
@@ -613,7 +628,7 @@ bool isModifierKey(Key key) {
 
 EventHandlerResult Qukeys::onFocusEvent(const char *command)
 {
-  if (::Focus.handleHelp(command, PSTR("qukeys.holdTimeout\nqukeys.overlapThreshold\nqukeys.minimumHoldTime\nqukeys.minimumPriorInterval\nqukeys.speculativeHold")))
+  if (::Focus.handleHelp(command, PSTR("qukeys.holdTimeout\nqukeys.overlapThreshold\nqukeys.minimumHoldTime\nqukeys.minimumPriorInterval\nqukeys.speculativeHold\nqukeys.holdOnOtherKeyPress")))
     return EventHandlerResult::OK;
 
   if (strncmp_P(command, PSTR("qukeys."), 7) != 0)
@@ -697,6 +712,20 @@ EventHandlerResult Qukeys::onFocusEvent(const char *command)
       uint8_t mods;
       ::Focus.read(mods);
       setSpeculativeHoldMods(mods);
+    }
+  }
+
+  if (strcmp_P(command + 7, PSTR("holdOnOtherKeyPress")) == 0)
+  {
+    if (::Focus.isEOL())
+    {
+      ::Focus.send(Qukeys::hold_on_other_key_press_);
+    }
+    else
+    {
+      uint8_t types;
+      ::Focus.read(types);
+      setHoldOnOtherKeyPress(types);
     }
   }
 

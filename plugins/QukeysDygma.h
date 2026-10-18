@@ -49,6 +49,14 @@
 #define _QUKEYS_SPECULATIVE_HOLD_MODS_DEFAULT 0
 #endif
 
+// `QUKEYS_HOLD_ON_OTHER_KEY_PRESS` sets which qukeys use hold-on-other-key-press
+// by default (see `Qukeys::setHoldOnOtherKeyPress()`): a bitmask of
+// `Qukeys::hold_on_other_key_press_layer` (1) and
+// `Qukeys::hold_on_other_key_press_mod` (2). Off by default.
+#ifndef QUKEYS_HOLD_ON_OTHER_KEY_PRESS
+#define QUKEYS_HOLD_ON_OTHER_KEY_PRESS 0
+#endif
+
 #define LT(layer, key) Key(kaleidoscope::ranges::DUL_FIRST + (layer << 8) + (Key_ ## key).getKeyCode())
 
 /*#define _DEPRECATED_MESSAGE_QUKEY_ROW_COL_CONSTRUCTOR                           \
@@ -198,6 +206,20 @@ class Qukeys : public kaleidoscope::Plugin {
     speculative_hold_mods_ = mods;
   }
 
+  // Qukey types for `setHoldOnOtherKeyPress()`.
+  static constexpr uint8_t hold_on_other_key_press_layer{1 << 0};
+  static constexpr uint8_t hold_on_other_key_press_mod{1 << 1};
+
+  // Set which qukeys use hold-on-other-key-press, as a bitmask of the
+  // `hold_on_other_key_press_*` constants above (0 turns it off). Like QMK's
+  // `HOLD_ON_OTHER_KEY_PRESS`, such a qukey takes on its alternate (hold)
+  // value as soon as another key is pressed while it is held, instead of
+  // waiting for that key to be released or for the hold timeout. The minimum
+  // hold time doesn't apply; the minimum prior interval still does.
+  void setHoldOnOtherKeyPress(uint8_t types) {
+    hold_on_other_key_press_ = types;
+  }
+
   // Function for defining the array of qukeys data (in PROGMEM). It's a
   // template function that takes as its sole argument an array reference of
   // size `_qukeys_count`, so there's no need to use `sizeof` to calculate the
@@ -282,6 +304,9 @@ class Qukeys : public kaleidoscope::Plugin {
   // its event queue. We can't just use an "injected" key state flag, because
   // that would cause other plugins to also ignore the event.
   bool flushing_queue_{false};
+
+  // Bitmask of the qukey types using hold-on-other-key-press (0 is off).
+  uint8_t hold_on_other_key_press_{QUKEYS_HOLD_ON_OTHER_KEY_PRESS};
 
   // Bitmask of the modifiers eligible for speculative hold (0 is off).
   uint8_t speculative_hold_mods_{_QUKEYS_SPECULATIVE_HOLD_MODS_DEFAULT};
