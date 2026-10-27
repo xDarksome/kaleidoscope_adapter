@@ -138,6 +138,13 @@ EventHandlerResult Qukeys::beforeReportingState() {
       Runtime.millisAtCycleStart() - (p_Qukeys_config->minimum_prior_interval + 1);
   }
 
+  // Forget the last tapped qukey once its quick tap term is over, so that the
+  // 16-bit timestamp can't wrap around and make it count again.
+  if (quick_tap_addr_.isValid() &&
+      Runtime.hasTimeExpired(quick_tap_release_time_, quick_tap_term_)) {
+    quick_tap_addr_ = KeyAddr{};
+  }
+
   // If any events get flushed from the queue, stop there; we can only safely
   // send the one report per cycle.
   if (! processQueue()) {
@@ -289,6 +296,16 @@ bool Qukeys::processQueue() {
   // key, so we don't need to do it repeatedly later.
   bool qukey_is_spacecadet = isModifierKey(queue_head_.primary_key);
 
+  // Quick tap: if this qukey was just tapped, and pressed again within the
+  // quick tap term after that, it takes on its primary value right away, so
+  // that holding it repeats the tap key.
+  if (quick_tap_term_ != 0 && !qukey_is_spacecadet &&
+      queue_head_addr == quick_tap_addr_ &&
+      uint16_t(event_queue_.timestamp(0) - quick_tap_release_time_) < quick_tap_term_) {
+    flushEvent(queue_head_.primary_key);
+    return true;
+  }
+
   // Whether this qukey takes on its alternate value as soon as another key is
   // pressed (hold-on-other-key-press), depending on whether its alternate
   // value is a layer shift or a modifier.
@@ -419,6 +436,23 @@ void Qukeys::flushEvent(Key event_key) {
       ((event_key >= Key_A && event_key <= Key_0) ||
        (event_key >= Key_Minus && event_key <= Key_Slash))) {
     prior_keypress_timestamp_ = event_queue_.timestamp(0);
+  }
+
+  // Keep track of the last tapped qukey for quick tap. A press of a qukey
+  // flushed in its primary state is a tap, which counts once its release is
+  // flushed. Any other key press ends the quick tap term.
+  if (!event_queue_.isRelease(0)) {
+    if (queue_head_addr != quick_tap_addr_) {
+      quick_tap_addr_ = KeyAddr{};
+    }
+    bool qukey_tap = queue_head_.alternate_key != Key_Transparent &&
+                     event_key == queue_head_.primary_key &&
+                     !isModifierKey(queue_head_.primary_key);
+    quick_tap_pending_addr_ = qukey_tap ? queue_head_addr : KeyAddr{};
+  } else if (queue_head_addr == quick_tap_pending_addr_) {
+    quick_tap_addr_ = queue_head_addr;
+    quick_tap_release_time_ = event_queue_.timestamp(0);
+    quick_tap_pending_addr_ = KeyAddr{};
   }
 
   // Remove the head event from the queue:
@@ -628,7 +662,7 @@ bool isModifierKey(Key key) {
 
 EventHandlerResult Qukeys::onFocusEvent(const char *command)
 {
-  if (::Focus.handleHelp(command, PSTR("qukeys.holdTimeout\nqukeys.overlapThreshold\nqukeys.minimumHoldTime\nqukeys.minimumPriorInterval\nqukeys.speculativeHold\nqukeys.holdOnOtherKeyPress")))
+  if (::Focus.handleHelp(command, PSTR("qukeys.holdTimeout\nqukeys.overlapThreshold\nqukeys.minimumHoldTime\nqukeys.minimumPriorInterval\nqukeys.speculativeHold\nqukeys.holdOnOtherKeyPress\nqukeys.quickTapTerm")))
     return EventHandlerResult::OK;
 
   if (strncmp_P(command, PSTR("qukeys."), 7) != 0)
@@ -726,6 +760,20 @@ EventHandlerResult Qukeys::onFocusEvent(const char *command)
       uint8_t types;
       ::Focus.read(types);
       setHoldOnOtherKeyPress(types);
+    }
+  }
+
+  if (strcmp_P(command + 7, PSTR("quickTapTerm")) == 0)
+  {
+    if (::Focus.isEOL())
+    {
+      ::Focus.send(Qukeys::quick_tap_term_);
+    }
+    else
+    {
+      uint16_t term;
+      ::Focus.read(term);
+      setQuickTapTerm(term);
     }
   }
 

@@ -57,6 +57,12 @@
 #define QUKEYS_HOLD_ON_OTHER_KEY_PRESS 0
 #endif
 
+// `QUKEYS_QUICK_TAP_TERM` sets the default quick tap term in milliseconds (see
+// `Qukeys::setQuickTapTerm()`). 0, the default, turns it off.
+#ifndef QUKEYS_QUICK_TAP_TERM
+#define QUKEYS_QUICK_TAP_TERM 0
+#endif
+
 #define LT(layer, key) Key(kaleidoscope::ranges::DUL_FIRST + (layer << 8) + (Key_ ## key).getKeyCode())
 
 /*#define _DEPRECATED_MESSAGE_QUKEY_ROW_COL_CONSTRUCTOR                           \
@@ -220,6 +226,15 @@ class Qukeys : public kaleidoscope::Plugin {
     hold_on_other_key_press_ = types;
   }
 
+  // Set the quick tap term in milliseconds (0 turns it off). Like QMK's
+  // `QUICK_TAP_TERM`, if a qukey that was just tapped is pressed again within
+  // this time after its release, with no other key pressed in between, it
+  // takes on its primary (tap) value right away, so holding it makes the tap
+  // key repeat instead of taking on its alternate (hold) value.
+  void setQuickTapTerm(uint16_t quick_tap_term) {
+    quick_tap_term_ = quick_tap_term;
+  }
+
   // Function for defining the array of qukeys data (in PROGMEM). It's a
   // template function that takes as its sole argument an array reference of
   // size `_qukeys_count`, so there's no need to use `sizeof` to calculate the
@@ -304,6 +319,16 @@ class Qukeys : public kaleidoscope::Plugin {
   // its event queue. We can't just use an "injected" key state flag, because
   // that would cause other plugins to also ignore the event.
   bool flushing_queue_{false};
+
+  // Quick tap term in milliseconds (0 is off).
+  uint16_t quick_tap_term_{QUKEYS_QUICK_TAP_TERM};
+
+  // The qukey that was last tapped, and when its release was flushed, for
+  // quick tap. `quick_tap_pending_addr_` is the qukey whose tap press was
+  // flushed, until its release is.
+  KeyAddr quick_tap_addr_{};
+  KeyAddr quick_tap_pending_addr_{};
+  uint16_t quick_tap_release_time_{0};
 
   // Bitmask of the qukey types using hold-on-other-key-press (0 is off).
   uint8_t hold_on_other_key_press_{QUKEYS_HOLD_ON_OTHER_KEY_PRESS};
