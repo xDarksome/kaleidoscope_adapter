@@ -45,6 +45,7 @@ namespace plugin {
 const MouseKeys_::MouseKeys_config_t * MouseKeys_::p_MouseKeys_config = nullptr;
 
 uint8_t MouseKeys_::mouseMoveIntent;
+uint8_t MouseKeys_::mouseWheelIntent;
 
 kbdtimer_t MouseKeys_::move_start_timer;
 kbdtimer_t MouseKeys_::accel_start_timer;
@@ -58,20 +59,47 @@ void MouseKeys_::setSpeedLimit(uint8_t speed_limit) {
   MouseWrapper.speedLimit = speed_limit;
 }
 
+// The speed multiplier (8.8 fixed point) to apply to the primary or the
+// alternative mouse/wheel keys: the set's Shift multiplier while Shift is held.
+uint16_t MouseKeys_::shiftMultiplier(bool alternative) {
+  bool shift = kaleidoscope::Runtime.hid().keyboard().isModifierKeyActive(Key_LeftShift) ||
+               kaleidoscope::Runtime.hid().keyboard().isModifierKeyActive(Key_RightShift);
+  if (!shift)
+    return NO_MULTIPLIER;
+  return alternative ? ALTERNATIVE_SHIFT_MULTIPLIER : SHIFT_MULTIPLIER;
+}
+
+// Scroll by the wheel speed of the primary or alternative wheel keys, scaled
+// by the Shift multiplier. Fractional amounts (in 1/256ths of a wheel step)
+// add up over time, so e.g. a multiplier of 0.5 on a speed of 1 scrolls one
+// step every other time.
+static int32_t wheelRemainder = 0;
+
 void MouseKeys_::scrollWheel(uint8_t keyCode) {
   if (!kbdtimer_check(&wheel_start_timer))
     return;
 
-  kbdtimer_set_ms( &wheel_start_timer, p_MouseKeys_config->wheelDelay );
+  bool alternative = keyCode & KEY_MOUSE_ALTERNATIVE;
+  uint8_t wheelSpeed = alternative ? MOUSEKEYS_ALTERNATIVE_WHEEL_SPEED : p_MouseKeys_config->wheelSpeed;
+  uint16_t wheelDelay = alternative ? MOUSEKEYS_ALTERNATIVE_WHEEL_DELAY : p_MouseKeys_config->wheelDelay;
+
+  kbdtimer_set_ms( &wheel_start_timer, wheelDelay );
+
+  int32_t amount = (int32_t)wheelSpeed * shiftMultiplier(alternative) + wheelRemainder;
+  int32_t steps = amount / 256;
+  if (steps > 127) steps = 127;
+  wheelRemainder = amount - steps * 256;
+  if (steps == 0)
+    return;
 
   if (keyCode & KEY_MOUSE_UP)
-    kaleidoscope::Runtime.hid().mouse().move(0, 0, p_MouseKeys_config->wheelSpeed);
+    kaleidoscope::Runtime.hid().mouse().move(0, 0, steps);
   else if (keyCode & KEY_MOUSE_DOWN)
-    kaleidoscope::Runtime.hid().mouse().move(0, 0, -p_MouseKeys_config->wheelSpeed);
+    kaleidoscope::Runtime.hid().mouse().move(0, 0, -steps);
   else if (keyCode & KEY_MOUSE_LEFT)
-    kaleidoscope::Runtime.hid().mouse().move(0, 0, 0, -p_MouseKeys_config->wheelSpeed);
+    kaleidoscope::Runtime.hid().mouse().move(0, 0, 0, -steps);
   else if (keyCode & KEY_MOUSE_RIGHT)
-    kaleidoscope::Runtime.hid().mouse().move(0, 0, 0, p_MouseKeys_config->wheelSpeed);
+    kaleidoscope::Runtime.hid().mouse().move(0, 0, 0, steps);
 }
 
 // To approximate a sine wave, this uses two parabolas. Acceleration begins
@@ -150,11 +178,18 @@ EventHandlerResult MouseKeys_::afterEachCycle() {
   kaleidoscope::Runtime.hid().mouse().sendReport();
   kaleidoscope::Runtime.hid().mouse().releaseAllButtons();
   mouseMoveIntent = 0;
+  mouseWheelIntent = 0;
 
   return EventHandlerResult::OK;
 }
 
 EventHandlerResult MouseKeys_::beforeReportingState() {
+  // Scrolling is done here rather than when the wheel key is scanned, so that
+  // a held Shift is already in the report (see shiftMultiplier()).
+  if (mouseWheelIntent != 0) {
+    scrollWheel(mouseWheelIntent);
+  }
+
   if (mouseMoveIntent == 0) {
     MouseWrapper.accelStep = 0;
     return EventHandlerResult::OK;
@@ -175,10 +210,7 @@ EventHandlerResult MouseKeys_::beforeReportingState() {
   uint8_t speedLimit = alternative ? MOUSEKEYS_ALTERNATIVE_SPEED_LIMIT : p_MouseKeys_config->speedLimit;
 
   // While Shift is held, the movement is scaled by that set's multiplier.
-  bool shift = kaleidoscope::Runtime.hid().keyboard().isModifierKeyActive(Key_LeftShift) ||
-               kaleidoscope::Runtime.hid().keyboard().isModifierKeyActive(Key_RightShift);
-  uint16_t multiplier = !shift ? NO_MULTIPLIER :
-                        alternative ? ALTERNATIVE_SHIFT_MULTIPLIER : SHIFT_MULTIPLIER;
+  uint16_t multiplier = shiftMultiplier(alternative);
 
   if ( kbdtimer_check( &accel_start_timer ) ) {
     if (MouseWrapper.accelStep < 255 - accelSpeed) {
@@ -228,11 +260,18 @@ EventHandlerResult MouseKeys_::onKeyswitchEvent(Key &mappedKey, KeyAddr key_addr
       /* After the Toggle On, there is no delay for the wheel. Let's set it to 0
        * and ask for another iteration. */
       wheel_start_timer = 0;
+      wheelRemainder = 0;
       kbdpwr_sleep_postpone();
     }
     if (keyIsPressed(keyState)) {
       if (mappedKey.getKeyCode() & KEY_MOUSE_WHEEL) {
-        scrollWheel(mappedKey.getKeyCode());
+        // Injected wheel keys (e.g. from macros, which send their own
+        // reports) scroll right away; physical ones in beforeReportingState().
+        if (keyState & INJECTED) {
+          scrollWheel(mappedKey.getKeyCode());
+        } else {
+          mouseWheelIntent = mappedKey.getKeyCode();
+        }
       } else {
         mouseMoveIntent |= mappedKey.getKeyCode();
       }

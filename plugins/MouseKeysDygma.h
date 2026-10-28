@@ -41,9 +41,20 @@
 #define MOUSEKEYS_ALTERNATIVE_SPEED_LIMIT    127
 #endif
 
+// The alternative wheel (scroll) settings, which can be overridden at build
+// time. Alternative wheel keys are wheel keys with the `KEY_MOUSE_ALTERNATIVE`
+// bit set (e.g. 0x5091 for scroll up, instead of 0x5011).
+#ifndef MOUSEKEYS_ALTERNATIVE_WHEEL_SPEED
+#define MOUSEKEYS_ALTERNATIVE_WHEEL_SPEED    1
+#endif
+#ifndef MOUSEKEYS_ALTERNATIVE_WHEEL_DELAY
+#define MOUSEKEYS_ALTERNATIVE_WHEEL_DELAY    50
+#endif
+
 // Speed multipliers applied while Shift is held, to the primary and to the
 // alternative mouse speed keys respectively (e.g. 0.5 or 2.0). They scale both
-// the movement and the speed limit, and can be overridden at build time.
+// the movement and the speed limit, as well as the wheel speed of the primary
+// and alternative wheel keys, and can be overridden at build time.
 #ifndef MOUSEKEYS_SHIFT_MULTIPLIER
 #define MOUSEKEYS_SHIFT_MULTIPLIER                1.0
 #endif
@@ -85,12 +96,14 @@ class MouseKeys_ : public kaleidoscope::Plugin {
   static const MouseKeys_config_t * p_MouseKeys_config;
 
   static uint8_t mouseMoveIntent;
+  static uint8_t mouseWheelIntent;
   static kbdtimer_t move_start_timer;
   static kbdtimer_t accel_start_timer;
   static kbdtimer_t wheel_start_timer;
 
   static void scrollWheel(uint8_t keyCode);
   static void move(int8_t x, int8_t y, uint8_t speedLimit, uint16_t multiplier);
+  static uint16_t shiftMultiplier(bool alternative);
 
   static void mem_speed_save( uint8_t speed );
   static void mem_speed_delay_save( uint16_t speedDelay );
